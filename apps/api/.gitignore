@@ -1,0 +1,29 @@
+# .env — real secrets, never commit
+.env
+
+# JWT RSA keypair (ADR-014) and any other local secret material — generated locally,
+# never committed. See README "Generating JWT keys".
+keys/
+*.pem
+
+# .NET build output
+bin/
+obj/
+out/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# EF Core
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log

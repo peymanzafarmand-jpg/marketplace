@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Marketplace.Domain</RootNamespace>
+    <!-- The Domain layer must stay dependency-free of Infrastructure/API by design
+         (see Architecture doc section 1.1). MediatR's INotification is the one
+         allowed exception, used only for the DomainEvent base type. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MediatR.Contracts" Version="2.0.1" />
+  </ItemGroup>
+
+</Project>

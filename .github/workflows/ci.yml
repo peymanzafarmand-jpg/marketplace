@@ -1,0 +1,277 @@
+name: CI Pipeline
+
+# Lint -> Build -> Unit Test -> Integration Test -> Dependency Scan -> Secret Scan -> Container Scan
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  security-events: write   # required for uploading SARIF (Trivy/CodeQL)
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------
+  # 1. LINT
+  # ---------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Backend format check
+        working-directory: apps/api
+        run: |
+          dotnet restore
+          dotnet format --verify-no-changes --severity error
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Frontend install
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Frontend lint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: Frontend type-check
+        working-directory: apps/web
+        run: npm run type-check
+
+  # ---------------------------------------------------------
+  # 2. BUILD
+  # ---------------------------------------------------------
+  build:
+    name: Build
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Backend build
+        working-directory: apps/api
+        run: |
+          dotnet restore
+          dotnet build --configuration Release --no-restore
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Frontend install & build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_BASE_URL: "http://localhost:8080/api/v1"
+        run: |
+          npm ci
+          npm run build
+
+  # ---------------------------------------------------------
+  # 3. UNIT TEST
+  # ---------------------------------------------------------
+  unit-test:
+    name: Unit Tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Backend unit tests (xUnit)
+        working-directory: apps/api
+        run: >
+          dotnet test tests/Marketplace.UnitTests
+          --configuration Release
+          --logger "trx;LogFileName=unit-tests.trx"
+          --collect:"XPlat Code Coverage"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Frontend unit tests (Vitest)
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run test:unit -- --coverage
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-coverage
+          path: |
+            apps/api/tests/Marketplace.UnitTests/**/coverage.cobertura.xml
+            apps/web/coverage/**
+
+  # ---------------------------------------------------------
+  # 4. INTEGRATION TEST
+  # ---------------------------------------------------------
+  # Marketplace.IntegrationTests (apps/api/tests/Marketplace.IntegrationTests/
+  # MarketplaceApiFactory.cs) uses Testcontainers to spin up its own throwaway
+  # Postgres/Redis/RabbitMQ containers per run — it does not read any of
+  # ConnectionStrings__Postgres / RabbitMq__HostName / etc. from CI-level env
+  # vars, and does not use fixed-port service containers. A `services:` block
+  # here previously started three unused containers and set env var names
+  # that didn't even match the app's real config keys (ConnectionStrings:Postgres,
+  # RabbitMq:HostName/Port/UserName/Password) — removed. ubuntu-latest runners
+  # ship Docker by default, which is all Testcontainers needs.
+  integration-test:
+    name: Integration Tests
+    needs: unit-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Backend integration tests
+        working-directory: apps/api
+        run: >
+          dotnet test tests/Marketplace.IntegrationTests
+          --configuration Release
+          --logger "trx;LogFileName=integration-tests.trx"
+
+      # Frontend API-contract tests do not exist yet (no test:integration
+      # script, no tests written) — removed rather than faking a script that
+      # would trivially "pass" without testing anything. Add this step back
+      # once such tests are actually written.
+
+  # ---------------------------------------------------------
+  # 5. DEPENDENCY SCAN
+  # ---------------------------------------------------------
+  dependency-scan:
+    name: Dependency Scan
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: npm audit (apps/web)
+        working-directory: apps/web
+        run: npm audit --audit-level=high
+
+      - name: .NET dependency vulnerability check
+        working-directory: apps/api
+        run: |
+          dotnet restore
+          dotnet list package --vulnerable --include-transitive | tee dotnet-vuln-report.txt
+          if grep -qi "critical\|high" dotnet-vuln-report.txt; then
+            echo "::error::Critical/High vulnerable NuGet packages found"
+            exit 1
+          fi
+
+      # Dependabot (separate workflow config, see .github/dependabot.yml)
+      # runs automatically on schedule and opens PRs for outdated/vulnerable deps.
+
+  # ---------------------------------------------------------
+  # 6. SECRET SCAN
+  # ---------------------------------------------------------
+  secret-scan:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so Gitleaks checks all past commits in this PR range
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+        with:
+          config-path: .gitleaks.toml
+        # gitleaks-action exits non-zero (fails the job) on any finding by default.
+
+  # ---------------------------------------------------------
+  # 7. CONTAINER SCAN
+  # ---------------------------------------------------------
+  container-scan:
+    name: Container Scan (Trivy)
+    needs: [integration-test, dependency-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build apps/api image
+        run: docker build -t marketplace-api:ci -f apps/api/Dockerfile apps/api
+
+      - name: Build apps/web image
+        run: docker build -t marketplace-web:ci -f apps/web/Dockerfile apps/web
+
+      - name: Trivy scan — apps/api image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: "marketplace-api:ci"
+          format: "sarif"
+          output: "trivy-api.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"     # fail the pipeline on Critical/High findings
+          ignore-unfixed: true
+
+      - name: Trivy scan — apps/web image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: "marketplace-web:ci"
+          format: "sarif"
+          output: "trivy-web.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: "."
+
+  # ---------------------------------------------------------
+  # Gate: everything must pass before merge (branch protection
+  # should require this job as a required status check)
+  # ---------------------------------------------------------
+  ci-success:
+    name: CI Success
+    needs: [lint, build, unit-test, integration-test, dependency-scan, secret-scan, container-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All CI stages passed."

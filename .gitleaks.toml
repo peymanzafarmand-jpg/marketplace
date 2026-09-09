@@ -1,0 +1,23 @@
+title = "Marketplace Gitleaks Config"
+
+[extend]
+useDefault = true   # start from Gitleaks' built-in ruleset (AWS keys, JWTs, generic API keys, etc.)
+
+[allowlist]
+description = "Ignore known-safe placeholder files"
+paths = [
+  '''\.env\.example$''',
+  '''docs/security/.*\.md$''',   # documentation shows placeholder values only, e.g. CHANGE_ME_LOCAL_ONLY
+]
+
+regexes = [
+  '''CHANGE_ME_LOCAL_ONLY''',
+  '''<[A-Z_]+>''',               # generic <PLACEHOLDER> tokens in docs
+]
+
+# Custom rule: catch our own connection-string pattern with embedded password
+[[rules]]
+id = "marketplace-connection-string-password"
+description = "Potential live DB password embedded in a connection string"
+regex = '''(?i)password\s*=\s*[^;'"\s]{8,}'''
+tags = ["database", "secret"]

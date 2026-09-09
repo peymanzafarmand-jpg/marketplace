@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # ---------- Backend: NuGet packages ----------
+  - package-ecosystem: "nuget"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "backend", "security"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # ---------- Frontend: npm packages ----------
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "frontend", "security"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # ---------- Docker base images ----------
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "docker", "security"]
+
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "docker", "security"]
+
+  # ---------- GitHub Actions workflow dependencies ----------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci", "security"]

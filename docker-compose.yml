@@ -1,0 +1,139 @@
+version: "3.9"
+
+# Local/dev orchestration for the Marketplace stack (baby, kids & mother products).
+# Structure follows docs/repo-contract.md: apps/api (backend), apps/web (frontend).
+# Hardening applied per docs/security/docker-security-checklist.md.
+# Secrets below are LOCAL-ONLY placeholders sourced from .env — never commit real values.
+
+services:
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    env_file: .env
+    ports:
+      - "3000:3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: 512m
+    cpus: "0.5"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [edge]
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      # ASP.NET Core reads nested config keys from env vars using "__" as the
+      # section separator (Section__Key). .env above uses plain names for
+      # human readability, so this block is what actually wires them into
+      # appsettings.json's expected keys (apps/api/src/Presentation/Marketplace.API/appsettings.json).
+      # Found and fixed during Task 1.7 — env_file alone did NOT satisfy this;
+      # without this block the API would fail to reach Postgres/Redis/RabbitMQ
+      # and would fail to load the JWT signing key on startup.
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Redis: "redis:6379,password=${REDIS_PASSWORD}"
+      RabbitMq__HostName: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__UserName: "${RABBITMQ_USER}"
+      RabbitMq__Password: "${RABBITMQ_PASSWORD}"
+      RabbitMq__VirtualHost: "${RABBITMQ_VHOST}"
+      Redis__InstanceName: "marketplace:"
+      # Keys are generated on the host (see README "First-time setup") and
+      # bind-mounted below — paths here are container-internal, NOT the
+      # host-relative ./keys/... paths in .env (those are for tooling that
+      # runs on the host, e.g. dotnet-ef, not for the container).
+      Jwt__PrivateKeyPath: "/run/secrets/jwt-private.pem"
+      Jwt__PublicKeyPath: "/run/secrets/jwt-public.pem"
+      Jwt__Issuer: "${JWT_ISSUER}"
+      Jwt__Audience: "${JWT_AUDIENCE}"
+      Jwt__AccessTokenMinutes: "${JWT_ACCESS_TOKEN_TTL_MINUTES}"
+      Jwt__RefreshTokenDays: "${JWT_REFRESH_TOKEN_TTL_DAYS}"
+      PasswordHashing__Pepper: "${PASSWORD_PEPPER}"
+    volumes:
+      - ./keys:/run/secrets:ro
+    ports:
+      - "8080:8080"   # internal API port is always 8080 (docs/repo-contract.md); host mapping matches 1:1 for local dev simplicity
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: 1g
+    cpus: "1.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks: [edge, internal]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    # No ports exposed to host in staging/production; local dev may map 5432:5432 via an override file.
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+    # Management UI (15672) only exposed via an override file for local dev, never in production.
+
+volumes:
+  pgdata:
+
+networks:
+  edge: {}          # reachable from host / internet-facing
+  internal:
+    internal: true   # no direct internet access — DB, cache, broker live here
