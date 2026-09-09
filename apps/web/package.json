@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "type-check": "tsc --noEmit",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

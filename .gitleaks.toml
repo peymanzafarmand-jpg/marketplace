@@ -19,5 +19,5 @@ regexes = [
 [[rules]]
 id = "marketplace-connection-string-password"
 description = "Potential live DB password embedded in a connection string"
-regex = '''(?i)password\s*=\s*[^;'"\s]{8,}'''
+regex = '''(?i)\bpassword\b\s*=\s*[^;'"\s$_\[\]]{8,}'''
 tags = ["database", "secret"]
