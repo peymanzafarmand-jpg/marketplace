@@ -240,7 +240,7 @@ jobs:
         run: docker build -t marketplace-web:ci -f apps/web/Dockerfile apps/web
 
       - name: Trivy scan — apps/api image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: "marketplace-api:ci"
           format: "sarif"
@@ -250,7 +250,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Trivy scan — apps/web image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: "marketplace-web:ci"
           format: "sarif"
